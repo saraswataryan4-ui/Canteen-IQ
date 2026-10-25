@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import crypto from 'crypto';
 import express from 'express';
 import type { Request, Response } from 'express';
@@ -20,8 +20,14 @@ import {
   ORDER_STATUS_LIST,
 } from './src/data/defaultOrders.ts';
 
+dotenv.config();
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Ensure local environment files (.env and .env.local) are loaded reliably
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config({ path: path.resolve(__dirname, '.env.local') });
 
 const PORT = Number(process.env.PORT) || 3000;
 const GEMMA_MODEL_ID = 'gemma-4-26b-a4b-it';
@@ -214,10 +220,19 @@ const DEFAULT_SERVER_MENU: ClientMenuSnapshotItem[] = [
 ];
 
 function getConfiguredApiKey(): string | null {
-  const raw = process.env.GEMINI_API_KEY;
+  const raw =
+    process.env.GEMINI_API_KEY ||
+    process.env.API_KEY ||
+    process.env.GOOGLE_API_KEY;
   if (!raw) return null;
   const trimmed = raw.trim();
-  if (!trimmed || trimmed === 'MY_GEMINI_API_KEY') {
+  if (
+    !trimmed ||
+    trimmed === 'MY_GEMINI_API_KEY' ||
+    trimmed === 'YOUR_GEMINI_API_KEY' ||
+    trimmed === 'PLACEHOLDER' ||
+    trimmed === 'your_api_key_here'
+  ) {
     return null;
   }
   return trimmed;
@@ -541,16 +556,16 @@ async function startServer() {
 
     // Note: Avoid HTTP 502/503/504 responses on /api/* because container Nginx intercepts 502/503/504 with warmup.html
     if (!apiKey) {
-      console.error(
-        `[CanteenIQ Gemma 4] req=${requestId} error=MISSING_API_KEY (GEMINI_API_KEY is unset or placeholder)`
+      console.warn(
+        `[CanteenIQ Gemma 4] req=${requestId} note=MISSING_API_KEY (GEMINI_API_KEY is unset or placeholder; handled gracefully)`
       );
-      res.status(500).json({
+      res.status(200).json({
         ok: false,
         requestId,
         model: GEMMA_MODEL_ID,
         errorCode: 'MISSING_API_KEY',
         error:
-          'Server GEMINI_API_KEY is not configured. Add GEMINI_API_KEY in Settings > Secrets to enable live Gemma 4 responses.',
+          'Server GEMINI_API_KEY is not configured yet. Add GEMINI_API_KEY in Settings > Secrets to enable live Gemma 4 responses.',
       });
       return;
     }

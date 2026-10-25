@@ -210,6 +210,15 @@ export const GemmaChat: React.FC<GemmaChatProps> = ({
     setInputError(null);
     setApiError(null);
 
+    if (serverStatus.checked && !serverStatus.configured) {
+      setApiError({
+        message:
+          'Server GEMINI_API_KEY is not configured yet. Add GEMINI_API_KEY in Settings > Secrets to receive genuine responses from Gemma 4.',
+        failedPrompt: trimmed,
+      });
+      return;
+    }
+
     const priorConversation = messages.filter((m) => m.id !== 'msg-welcome');
     const trimmedHistorySource =
       isRetry &&
