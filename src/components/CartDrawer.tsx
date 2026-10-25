@@ -8,10 +8,12 @@ import {
   Plus,
   ShoppingBag,
   Trash2,
+  UserCheck,
   X,
 } from 'lucide-react';
 import { CartItem, DiningTable, MenuItem, Order, TableStatus } from '../types';
 import { ResilientImage } from './ResilientImage';
+import { useAuth } from '../auth/AuthContext';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -25,9 +27,12 @@ interface CartDrawerProps {
   onPlaceOrder: (payload: {
     studentName: string;
     rollNumber: string;
+    customerPhone: string;
+    deliveryAddress: string;
+    deliveryNotes?: string;
     tableId?: string;
     notes?: string;
-  }) => Order;
+  }) => Promise<Order>;
   onTrackOrder: (orderToken: string) => void;
 }
 
@@ -43,13 +48,22 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onPlaceOrder,
   onTrackOrder,
 }) => {
-  const [studentName, setStudentName] = useState('Ananya Sharma');
-  const [rollNumber, setRollNumber] = useState('CS25B031');
+  const { user, isAuthenticated, signInWithGoogle } = useAuth();
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('Express Pickup Counter');
+  const [deliveryNotes, setDeliveryNotes] = useState('');
   const [selectedTableId, setSelectedTableId] = useState<string>('');
-  const [notes, setNotes] = useState('');
   const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+
+  // Pre-fill customer name when user signs in with Google
+  useEffect(() => {
+    if (user?.displayName && !customerName) {
+      setCustomerName(user.displayName);
+    }
+  }, [user, customerName]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -66,6 +80,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   if (!isOpen) return null;
 
+  // Calculate cart line items using trusted menu prices
   const detailedCart = cart
     .map((c) => {
       const item = menuItems.find((m) => m.id === c.menuItemId);
@@ -87,22 +102,37 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     (t) => t.status === TableStatus.Reserved && Boolean(t.isCurrentUserReservation)
   );
 
-  const handleCheckoutSubmit = (e: React.FormEvent) => {
+  const handleCheckoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isPlacingOrder) return;
     setCheckoutError(null);
 
-    if (detailedCart.length === 0) {
-      setCheckoutError('Your demo tray is empty. Please add at least one item.');
+    if (!isAuthenticated || !user) {
+      setCheckoutError('Please sign in with Google before placing your order.');
       return;
     }
 
-    const cleanName = studentName.trim();
-    const cleanRoll = rollNumber.trim();
-    if (!cleanName || !cleanRoll) {
-      setCheckoutError(
-        'Please enter both your Student Name and Campus ID / Roll Number.'
-      );
+    if (detailedCart.length === 0) {
+      setCheckoutError('Your cart is empty. Please add at least one food item.');
+      return;
+    }
+
+    const cleanName = customerName.trim();
+    const cleanPhone = customerPhone.trim();
+    const cleanAddress = deliveryAddress.trim();
+
+    if (!cleanName) {
+      setCheckoutError('Please enter your full name for the order.');
+      return;
+    }
+
+    if (!cleanPhone || cleanPhone.length < 7) {
+      setCheckoutError('Please enter a valid contact phone number.');
+      return;
+    }
+
+    if (!cleanAddress || cleanAddress.length < 3) {
+      setCheckoutError('Please specify your delivery location or counter pickup.');
       return;
     }
 
@@ -111,23 +141,35 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     );
     if (invalidStockItem) {
       setCheckoutError(
-        `${invalidStockItem.name} only has ${invalidStockItem.stock} portions available in demo stock. Please adjust your tray quantity.`
+        `${invalidStockItem.name} only has ${invalidStockItem.stock} portions available. Please adjust your quantity.`
       );
       return;
     }
 
     setIsPlacingOrder(true);
-    window.setTimeout(() => {
-      const created = onPlaceOrder({
+    try {
+      const created = await onPlaceOrder({
         studentName: cleanName,
-        rollNumber: cleanRoll,
+        rollNumber: user.email ? user.email.split('@')[0].toUpperCase() : 'USER',
+        customerPhone: cleanPhone,
+        deliveryAddress: cleanAddress,
+        deliveryNotes: deliveryNotes.trim() || undefined,
         tableId: selectedTableId || undefined,
-        notes: notes.trim() || undefined,
+        notes: deliveryNotes.trim() || undefined,
       });
-      setIsPlacingOrder(false);
       setConfirmedOrder(created);
-      setNotes('');
-    }, 180);
+      onClearCart();
+      setDeliveryNotes('');
+    } catch (err: unknown) {
+      console.error('Order submission error:', err);
+      setCheckoutError(
+        err instanceof Error
+          ? err.message
+          : 'Unable to save order to Firestore. Please try again.'
+      );
+    } finally {
+      setIsPlacingOrder(false);
+    }
   };
 
   const handleCloseDrawer = () => {
@@ -155,10 +197,10 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               id="cart-drawer-title"
               className="text-lg font-bold text-slate-950"
             >
-              {confirmedOrder ? 'Demo Order Confirmed' : 'Your Demo Tray'}
+              {confirmedOrder ? 'Order Confirmed' : 'Your Food Cart'}
             </h2>
             <p className="text-xs text-slate-500">
-              Sample campus checkout · No real payment charged
+              Fresh Campus Dining · Firestore Persistent Ordering
             </p>
           </div>
           <button
@@ -176,36 +218,47 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             <div className="p-6 bg-emerald-50/70 border border-emerald-200 rounded-xl text-center space-y-3">
               <CheckCircle2 className="w-10 h-10 text-emerald-700 mx-auto" />
-              <p className="text-xs font-medium text-emerald-800">
-                Unique Demo Order Token Generated
+              <p className="text-xs font-semibold uppercase tracking-wider text-emerald-800">
+                Order Placed in Cloud Firestore
               </p>
               <p className="text-3xl font-bold font-mono tabular-nums text-emerald-950 tracking-tight">
                 {confirmedOrder.token}
               </p>
+              <p className="text-xs font-mono text-slate-500 break-all">
+                Order ID: {confirmedOrder.id}
+              </p>
               <p className="text-sm text-slate-600">
-                Initial Status:{' '}
+                Status:{' '}
                 <span className="font-semibold text-emerald-800">
                   {confirmedOrder.status}
                 </span>{' '}
-                · Est. demo prep: ~{confirmedOrder.estimatedMinutes} mins
+                · Estimated prep time: ~{confirmedOrder.estimatedMinutes} mins
               </p>
             </div>
 
             <div className="border border-slate-200 rounded-xl p-4 space-y-3 text-sm">
               <div className="flex justify-between text-slate-600">
-                <span>Student</span>
+                <span>Customer</span>
                 <span className="font-medium text-slate-900">
-                  {confirmedOrder.studentName} ({confirmedOrder.rollNumber})
+                  {confirmedOrder.studentName}
                 </span>
               </div>
-              <div className="flex justify-between text-slate-600">
-                <span>Pickup Mode</span>
-                <span className="font-medium text-slate-900">
-                  {confirmedOrder.tableId
-                    ? `Counter Pickup · Seated at ${confirmedOrder.tableId}`
-                    : 'Express Counter Pickup'}
-                </span>
-              </div>
+              {confirmedOrder.customerPhone && (
+                <div className="flex justify-between text-slate-600">
+                  <span>Phone</span>
+                  <span className="font-mono text-slate-900">
+                    {confirmedOrder.customerPhone}
+                  </span>
+                </div>
+              )}
+              {confirmedOrder.deliveryAddress && (
+                <div className="flex justify-between text-slate-600">
+                  <span>Delivery Address</span>
+                  <span className="font-medium text-slate-900 text-right max-w-[200px]">
+                    {confirmedOrder.deliveryAddress}
+                  </span>
+                </div>
+              )}
 
               <div className="border-t border-slate-200 pt-3 space-y-2">
                 {confirmedOrder.items.map((line) => (
@@ -224,18 +277,12 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               </div>
 
               <div className="border-t border-slate-200 pt-3 flex justify-between text-base font-bold text-slate-950 tabular-nums">
-                <span>Demo Total Price</span>
+                <span>Total Amount Paid</span>
                 <span className="font-mono text-emerald-800">
                   ₹{confirmedOrder.totalAmount}
                 </span>
               </div>
             </div>
-
-            <p className="text-xs text-slate-500 text-center">
-              Demo Mode · Your order is saved in shared session state and updates
-              automatically in My Orders &amp; Order Tracking as canteen staff
-              prepare it.
-            </p>
 
             <div className="space-y-2.5 pt-1">
               <button
@@ -248,24 +295,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 }}
                 className="w-full py-3 px-4 inline-flex items-center justify-center gap-2 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer"
               >
-                <span>Open My Orders &amp; Tracking</span>
+                <span>View in My Orders</span>
                 <ArrowRight className="w-4 h-4" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmedOrder(null);
-                  onClose();
-                  setTimeout(() => {
-                    document
-                      .getElementById('student-order-tracking')
-                      ?.scrollIntoView({ behavior: 'smooth' });
-                  }, 80);
-                }}
-                className="w-full py-2.5 px-4 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
-              >
-                View Order Tracking on Home Page
               </button>
             </div>
           </div>
@@ -276,11 +307,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </div>
             <div className="space-y-1">
               <p className="text-base font-semibold text-slate-900">
-                Your demo tray is empty
+                Your food cart is empty
               </p>
               <p className="text-sm text-slate-500 max-w-xs">
-                Browse the sample campus menu to add Samosa, Veg Sandwich, Masala
-                Dosa, or Cold Coffee.
+                Browse our delicious canteen menu to add fresh snacks, hot meals,
+                and beverages.
               </p>
             </div>
             <button
@@ -288,7 +319,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               onClick={handleCloseDrawer}
               className="px-4 py-2.5 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer"
             >
-              Browse Sample Menu
+              Browse Public Menu
             </button>
           </div>
         ) : (
@@ -297,11 +328,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             className="flex-1 flex flex-col justify-between overflow-hidden"
           >
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* Itemized List */}
+              {/* Itemized Cart List */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-slate-600">
-                    Selected Demo Items ({detailedCart.length})
+                    Selected Food Items ({detailedCart.length})
                   </span>
                   <button
                     type="button"
@@ -372,99 +403,148 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 </div>
               </div>
 
-              {/* Demo Student Details */}
-              <div className="space-y-3 pt-2 border-t border-slate-200">
-                <p className="text-xs font-semibold text-slate-700">
-                  Student Token Details (Demo)
-                </p>
+              {/* Authentication Gate or Customer Checkout Fields */}
+              {!isAuthenticated || !user ? (
+                <div className="p-4 rounded-xl bg-emerald-50/80 border border-emerald-200 space-y-3 text-center">
+                  <div className="space-y-1">
+                    <p className="text-sm font-bold text-emerald-950">
+                      Sign in with Google to Checkout
+                    </p>
+                    <p className="text-xs text-slate-600">
+                      You can browse food items as a guest, but Google authentication
+                      is required before placing and tracking orders.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void signInWithGoogle()}
+                    className="w-full py-2.5 px-4 inline-flex items-center justify-center gap-2 text-sm font-semibold text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors shadow-xs cursor-pointer"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                      <path
+                        fill="#4285F4"
+                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                      />
+                      <path
+                        fill="#EA4335"
+                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                      />
+                    </svg>
+                    <span>Continue with Google</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4 pt-2 border-t border-slate-200">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800 bg-emerald-50 px-3 py-2 rounded-lg">
+                    <UserCheck className="w-4 h-4 text-emerald-600" />
+                    <span>Ordering as {user.displayName || user.email}</span>
+                  </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label
-                      htmlFor="checkout-student-name"
-                      className="block text-xs text-slate-600 mb-1"
+                      htmlFor="customer-name-input"
+                      className="block text-xs font-semibold text-slate-700 mb-1"
                     >
-                      Student Name
+                      Customer Full Name *
                     </label>
                     <input
-                      id="checkout-student-name"
+                      id="customer-name-input"
                       type="text"
                       required
-                      value={studentName}
-                      onChange={(e) => setStudentName(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-emerald-600"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      placeholder="e.g. Aryan Saraswat"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:border-emerald-600"
                     />
                   </div>
+
                   <div>
                     <label
-                      htmlFor="checkout-roll"
-                      className="block text-xs text-slate-600 mb-1"
+                      htmlFor="customer-phone-input"
+                      className="block text-xs font-semibold text-slate-700 mb-1"
                     >
-                      Campus ID / Roll No.
+                      Contact Phone Number *
                     </label>
                     <input
-                      id="checkout-roll"
-                      type="text"
+                      id="customer-phone-input"
+                      type="tel"
                       required
-                      value={rollNumber}
-                      onChange={(e) => setRollNumber(e.target.value)}
-                      className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg focus:outline-none focus:border-emerald-600"
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value)}
+                      placeholder="e.g. +91 98765 43210"
+                      className="w-full px-3.5 py-2 text-sm font-mono bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:border-emerald-600"
                     />
                   </div>
-                </div>
 
-                <div>
-                  <label
-                    htmlFor="checkout-table"
-                    className="block text-xs text-slate-600 mb-1"
-                  >
-                    Dining Preference (Optional)
-                  </label>
-                  <select
-                    id="checkout-table"
-                    value={selectedTableId}
-                    onChange={(e) => setSelectedTableId(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-emerald-600"
-                  >
-                    <option value="">Express Counter Pickup (Takeaway)</option>
-                    {userReservedTables.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        My Reserved {t.label} (
-                        {t.reservationId ? `${t.reservationId} · ` : ''}
-                        {t.zone})
-                      </option>
-                    ))}
-                    {tables
-                      .filter((t) => t.status === TableStatus.Available)
-                      .map((t) => (
-                        <option key={t.id} value={t.id}>
-                          Dine at {t.label} ({t.capacity} seats · {t.zone})
-                        </option>
-                      ))}
-                  </select>
-                </div>
+                  <div>
+                    <label
+                      htmlFor="delivery-address-input"
+                      className="block text-xs font-semibold text-slate-700 mb-1"
+                    >
+                      Delivery Address / Location *
+                    </label>
+                    <input
+                      id="delivery-address-input"
+                      type="text"
+                      required
+                      value={deliveryAddress}
+                      onChange={(e) => setDeliveryAddress(e.target.value)}
+                      placeholder="e.g. Hostel Block B, Room 304 OR Express Counter"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
 
-                <div>
-                  <label
-                    htmlFor="checkout-notes"
-                    className="block text-xs text-slate-600 mb-1"
-                  >
-                    Kitchen Note (Optional)
-                  </label>
-                  <input
-                    id="checkout-notes"
-                    type="text"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="e.g., Less spicy chutney, extra napkin"
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-emerald-600"
-                  />
-                </div>
-              </div>
-            </div>
+                  <div>
+                    <label
+                      htmlFor="delivery-notes-input"
+                      className="block text-xs font-semibold text-slate-700 mb-1"
+                    >
+                      Delivery Instructions / Dietary Notes (Optional)
+                    </label>
+                    <input
+                      id="delivery-notes-input"
+                      type="text"
+                      value={deliveryNotes}
+                      onChange={(e) => setDeliveryNotes(e.target.value)}
+                      placeholder="e.g. Extra chutney, deliver before 1:30 PM"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
 
-            {/* Checkout Summary Footer */}
-            <div className="p-6 bg-slate-50 border-t border-slate-200 space-y-4">
+                  {userReservedTables.length > 0 && (
+                    <div>
+                      <label
+                        htmlFor="table-pickup-select"
+                        className="block text-xs font-semibold text-slate-700 mb-1"
+                      >
+                        Link to Reserved Table (Optional)
+                      </label>
+                      <select
+                        id="table-pickup-select"
+                        value={selectedTableId}
+                        onChange={(e) => setSelectedTableId(e.target.value)}
+                        className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:border-emerald-600"
+                      >
+                        <option value="">Express Counter Pickup</option>
+                        {userReservedTables.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.label} ({t.zone})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {checkoutError && (
                 <div
                   role="alert"
@@ -474,48 +554,51 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   <span>{checkoutError}</span>
                 </div>
               )}
+            </div>
 
-              <div className="space-y-1.5 text-sm">
-                <div className="flex justify-between text-slate-600 tabular-nums">
-                  <span>Sample Item Subtotal</span>
-                  <span className="font-mono">₹{subtotal}</span>
-                </div>
-                <div className="flex justify-between text-slate-600 tabular-nums">
-                  <span>Campus Convenience Fee (Demo)</span>
-                  <span className="font-mono text-emerald-700">₹0 (Free)</span>
-                </div>
-                <div className="flex justify-between text-slate-600 tabular-nums">
-                  <span>Estimated Prep Time</span>
-                  <span>~{estimatedMinutes} mins</span>
-                </div>
-                <div className="pt-2 border-t border-slate-200 flex justify-between text-base font-bold text-slate-950 tabular-nums">
-                  <span>Demo Order Total</span>
-                  <span className="font-mono text-emerald-800">₹{subtotal}</span>
-                </div>
+            {/* Drawer Footer Checkout CTA */}
+            <div className="p-6 border-t border-slate-200 bg-slate-50/70 space-y-3 shrink-0">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-600">Subtotal</span>
+                <span className="font-mono tabular-nums text-slate-900">
+                  ₹{subtotal}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-base font-bold text-slate-950">
+                <span>Total Amount</span>
+                <span className="font-mono text-emerald-800 text-lg tabular-nums">
+                  ₹{subtotal}
+                </span>
               </div>
 
-              <button
-                type="submit"
-                disabled={isPlacingOrder}
-                className="w-full py-3 px-4 inline-flex items-center justify-center gap-2 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 active:scale-[0.99] rounded-lg transition-all cursor-pointer"
-              >
-                {isPlacingOrder ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Generating Demo Order Token...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Confirm Demo Order · ₹{subtotal}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-
-              <p className="text-[11px] text-center text-slate-500">
-                Demo Mode · Validates sample stock and creates an instant pickup
-                token without real payment.
-              </p>
+              {isAuthenticated && user ? (
+                <button
+                  type="submit"
+                  disabled={isPlacingOrder || detailedCart.length === 0}
+                  className="w-full py-3 px-4 inline-flex items-center justify-center gap-2 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
+                >
+                  {isPlacingOrder ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Saving Order to Firestore...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ShoppingBag className="w-4 h-4" />
+                      <span>Place Order (₹{subtotal})</span>
+                    </>
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void signInWithGoogle()}
+                  className="w-full py-3 px-4 inline-flex items-center justify-center gap-2 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer"
+                >
+                  <span>Sign In with Google to Order</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </form>
         )}

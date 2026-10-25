@@ -3,6 +3,7 @@ export enum OrderStatus {
   Preparing = 'Preparing',
   Ready = 'Ready',
   Collected = 'Collected',
+  Delivered = 'Delivered',
 }
 
 export enum FoodCategory {
@@ -26,7 +27,7 @@ export enum ActiveTab {
   Chat = 'chat',
 }
 
-export type StaffSection = 'orders' | 'inventory' | 'tables';
+export type StaffSection = 'orders' | 'inventory' | 'tables' | 'staff' | 'audit';
 
 export interface MenuItem {
   id: string;
@@ -99,6 +100,11 @@ export interface Order {
   status: OrderStatus;
   createdAt: string;
   estimatedMinutes: number;
+  userId?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  deliveryAddress?: string;
+  deliveryNotes?: string;
   tableId?: string;
   notes?: string;
   isUserOrder?: boolean;
@@ -164,4 +170,40 @@ export interface ChatMessage {
   modelId?: string;
   latencyMs?: number;
   validatedByApp?: boolean;
+}
+
+export interface CustomerAccount {
+  customerId: string;
+  uid: string;
+  name: string;
+  email: string;
+  phone: string;
+  emailVerified: boolean;
+  createdAt: string;
+  status: 'active' | 'suspended';
+  provider: 'google.com' | 'email_otp';
+}
+
+export interface StaffMember {
+  staffId: string;
+  staffUid: string;
+  name: string;
+  email: string;
+  passcode?: string;
+  role: string;
+  permissions: string[];
+  status: 'active' | 'inactive';
+  createdAt: string;
+  createdBy: string;
+  lastLoginAt?: string;
+}
+
+export interface AuditLog {
+  id: string;
+  adminEmail: string;
+  action: 'CREATE_STAFF' | 'UPDATE_STAFF' | 'DEACTIVATE_STAFF' | 'ACTIVATE_STAFF' | 'DELETE_STAFF';
+  targetStaffId: string;
+  targetStaffName: string;
+  details: string;
+  timestamp: string;
 }

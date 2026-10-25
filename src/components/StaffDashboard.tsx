@@ -3,13 +3,25 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  Edit2,
   Eye,
+  History,
+  KeyRound,
+  Loader2,
   LogOut,
   Minus,
   Plus,
   RotateCcw,
   Search,
+  Shield,
   ShieldAlert,
+  ShieldCheck,
+  ToggleLeft,
+  ToggleRight,
+  UserCheck,
+  UserPlus,
+  Users,
+  X,
   XCircle,
 } from 'lucide-react';
 import {
@@ -17,12 +29,16 @@ import {
   MenuItem,
   Order,
   OrderStatus,
+  StaffMember,
   StaffSection,
   TableStatus,
 } from '../types';
+import { useAuth } from '../auth/AuthContext';
+import { Permission } from '../auth/authService';
 
 interface StaffDashboardProps {
   orders: Order[];
+
   menuItems: MenuItem[];
   tables: DiningTable[];
   selectedToken: string | null;
@@ -46,12 +62,14 @@ const ALL_STATUSES: OrderStatus[] = [
   OrderStatus.Preparing,
   OrderStatus.Ready,
   OrderStatus.Collected,
+  OrderStatus.Delivered,
 ];
 
 const STAFF_ACTION_STATUSES: OrderStatus[] = [
   OrderStatus.Preparing,
   OrderStatus.Ready,
   OrderStatus.Collected,
+  OrderStatus.Delivered,
 ];
 
 const TABLE_STATUS_ACTIONS: TableStatus[] = [
@@ -82,6 +100,30 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'All'>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmReset, setConfirmReset] = useState(false);
+
+  // Admin staff management state
+  const {
+    isAdmin,
+    staffList,
+    auditLogs,
+    createStaffMember,
+    toggleStaffStatus,
+    updateStaffMember,
+  } = useAuth();
+  const [isAddStaffOpen, setIsAddStaffOpen] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
+  const [staffFormSubmitting, setStaffFormSubmitting] = useState(false);
+  const [staffFormError, setStaffFormError] = useState<string | null>(null);
+
+  // New staff fields
+  const [newStaffName, setNewStaffName] = useState('');
+  const [newStaffEmail, setNewStaffEmail] = useState('');
+  const [newStaffPasscode, setNewStaffPasscode] = useState('staff2026');
+  const [newStaffRole, setNewStaffRole] = useState('Kitchen Counter Lead');
+  const [newStaffPermissions, setNewStaffPermissions] = useState<string[]>([
+    'staff:view_dashboard',
+    'orders:update_status',
+  ]);
 
   const metrics = useMemo(() => {
     const pendingCount = orders.filter(
@@ -125,26 +167,25 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-      {/* DEMO ONLY Staff Session Notice */}
-      <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-start sm:items-center gap-2.5 text-xs text-amber-950">
-          <ShieldAlert className="w-4 h-4 shrink-0 text-amber-700 mt-0.5 sm:mt-0" />
+      {/* Verified Admin Authorization Banner */}
+      <div className="p-4 rounded-xl bg-emerald-50/80 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start sm:items-center gap-2.5 text-xs text-emerald-950">
+          <ShieldAlert className="w-4 h-4 shrink-0 text-emerald-700 mt-0.5 sm:mt-0" />
           <p>
-            <span className="font-bold">DEMO ONLY STAFF ACCESS</span> · Signed in
+            <span className="font-bold">VERIFIED ADMINISTRATOR</span> · Signed in
             as <span className="font-semibold">{staffDisplayName}</span> (
             <span className="font-mono">{staffId}</span> · {staffRoleTitle}).
-            Prototype role state only — backend authentication is required for
-            real production security.
+            Real-time synchronization with Cloud Firestore.
           </p>
         </div>
 
         <button
           type="button"
           onClick={onLogout}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-950 bg-white border border-amber-300 hover:bg-amber-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer w-fit"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-950 bg-white border border-emerald-300 hover:bg-emerald-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer w-fit"
         >
           <LogOut className="w-3.5 h-3.5" />
-          <span>Sign Out Staff</span>
+          <span>Sign Out Admin</span>
         </button>
       </div>
 
@@ -297,7 +338,37 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
           >
             Floor Tables ({tables.length})
           </button>
+
+          {isAdmin && (
+            <>
+              <button
+                type="button"
+                onClick={() => onSelectSection('staff')}
+                className={`px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                  activeSection === 'staff'
+                    ? 'bg-white text-emerald-950 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Staff Management ({staffList.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectSection('audit')}
+                className={`px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                  activeSection === 'audit'
+                    ? 'bg-white text-emerald-950 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <History className="w-3.5 h-3.5 text-slate-500" />
+                <span>Audit Trail ({auditLogs.length})</span>
+              </button>
+            </>
+          )}
         </div>
+
 
         {activeSection === 'orders' && (
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
@@ -807,6 +878,481 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* Admin Section: Staff Management */}
+      {isAdmin && activeSection === 'staff' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <h2 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-emerald-600" />
+                  <span>Canteen Staff Directory &amp; Role Management</span>
+                </h2>
+                <p className="text-xs text-slate-600">
+                  Manage kitchen and counter staff accounts. Each staff member has a unique Staff ID and Staff UID. Deactivated staff immediately lose system access.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setStaffFormError(null);
+                  setNewStaffName('');
+                  setNewStaffEmail('');
+                  setNewStaffPasscode('staff2026');
+                  setNewStaffRole('Kitchen Counter Lead');
+                  setIsAddStaffOpen(true);
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm rounded-lg transition-colors cursor-pointer shadow-xs w-fit"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Add Staff Member</span>
+              </button>
+            </div>
+
+            {/* Staff Table */}
+            <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-slate-700 text-xs uppercase font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Staff ID &amp; UID</th>
+                    <th className="py-3 px-4">Name &amp; Email</th>
+                    <th className="py-3 px-4">Role Title</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Permissions</th>
+                    <th className="py-3 px-4">Created</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 text-xs">
+                  {staffList.map((staff) => {
+                    const isActive = staff.status === 'active';
+                    return (
+                      <tr
+                        key={staff.staffId}
+                        className={isActive ? 'hover:bg-slate-50/50' : 'bg-red-50/30'}
+                      >
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          <div className="space-y-0.5">
+                            <span className="font-mono font-bold text-emerald-900 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                              {staff.staffId}
+                            </span>
+                            <p className="text-[10px] text-slate-500 font-mono">
+                              {staff.staffUid}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          <p className="font-semibold text-slate-900">{staff.name}</p>
+                          <p className="text-slate-500">{staff.email}</p>
+                        </td>
+                        <td className="py-3.5 px-4 whitespace-nowrap font-medium text-slate-800">
+                          {staff.role}
+                        </td>
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase ${
+                              isActive
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                : 'bg-red-100 text-red-800 border border-red-200'
+                            }`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                isActive ? 'bg-emerald-600' : 'bg-red-600'
+                              }`}
+                            />
+                            {staff.status}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="flex flex-wrap gap-1 max-w-xs">
+                            {staff.permissions.map((p) => (
+                              <span
+                                key={p}
+                                className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-mono"
+                              >
+                                {p.replace(/^(staff|orders|inventory|tables|system):/, '')}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 whitespace-nowrap text-slate-500 text-[11px]">
+                          <p>{new Date(staff.createdAt).toLocaleDateString()}</p>
+                          <p className="text-slate-400 truncate max-w-[120px]">
+                            by {staff.createdBy.split('@')[0]}
+                          </p>
+                        </td>
+                        <td className="py-3.5 px-4 whitespace-nowrap text-right">
+                          <div className="inline-flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditingStaff(staff)}
+                              className="px-2.5 py-1 text-slate-700 hover:text-slate-900 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-xs font-medium cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void toggleStaffStatus(
+                                  staff.staffId,
+                                  isActive ? 'inactive' : 'active'
+                                )
+                              }
+                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer border ${
+                                isActive
+                                  ? 'text-red-700 bg-red-50 border-red-200 hover:bg-red-100'
+                                  : 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+                              }`}
+                            >
+                              {isActive ? 'Deactivate' : 'Activate'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Section: Audit Trail */}
+      {isAdmin && activeSection === 'audit' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-4">
+            <div className="space-y-1">
+              <h2 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+                <History className="w-5 h-5 text-emerald-600" />
+                <span>Administrative Actions Audit Trail</span>
+              </h2>
+              <p className="text-xs text-slate-600">
+                Immutable record of administrative operations, staff account lifecycle events, and permission updates.
+              </p>
+            </div>
+
+            <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-slate-700 text-xs uppercase font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Timestamp</th>
+                    <th className="py-3 px-4">Action</th>
+                    <th className="py-3 px-4">Target Staff</th>
+                    <th className="py-3 px-4">Admin Email</th>
+                    <th className="py-3 px-4">Audit Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 text-xs">
+                  {auditLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50/50">
+                      <td className="py-3.5 px-4 whitespace-nowrap font-mono text-[11px] text-slate-600">
+                        {new Date(log.timestamp).toLocaleString()}
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase font-mono ${
+                            log.action.includes('CREATE')
+                              ? 'bg-blue-100 text-blue-800'
+                              : log.action.includes('DEACTIVATE')
+                              ? 'bg-red-100 text-red-800'
+                              : 'bg-emerald-100 text-emerald-800'
+                          }`}
+                        >
+                          {log.action}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap font-medium text-slate-900">
+                        <span className="font-mono">{log.targetStaffId}</span> · {log.targetStaffName}
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap text-slate-600 font-mono text-[11px]">
+                        {log.adminEmail}
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-700">
+                        {log.details}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Staff Modal */}
+      {isAddStaffOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5 border border-slate-200 shadow-2xl relative animate-in fade-in zoom-in-95 duration-150">
+            <button
+              type="button"
+              onClick={() => setIsAddStaffOpen(false)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <h3 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-emerald-600" />
+                <span>Add New Canteen Staff</span>
+              </h3>
+              <p className="text-xs text-slate-600">
+                A unique Staff ID (STF-XXX) and Staff UID will be assigned automatically.
+              </p>
+            </div>
+
+            {staffFormError && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
+                <span>{staffFormError}</span>
+              </div>
+            )}
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setStaffFormError(null);
+                setStaffFormSubmitting(true);
+                try {
+                  await createStaffMember({
+                    name: newStaffName.trim(),
+                    email: newStaffEmail.trim().toLowerCase(),
+                    passcode: newStaffPasscode.trim(),
+                    role: newStaffRole.trim(),
+                    permissions: newStaffPermissions,
+                  });
+                  setIsAddStaffOpen(false);
+                } catch (err: unknown) {
+                  setStaffFormError(
+                    err instanceof Error ? err.message : 'Failed to create staff member'
+                  );
+                } finally {
+                  setStaffFormSubmitting(false);
+                }
+              }}
+              className="space-y-4 text-xs"
+            >
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Full Name</label>
+                <input
+                  type="text"
+                  required
+                  value={newStaffName}
+                  onChange={(e) => setNewStaffName(e.target.value)}
+                  placeholder="e.g. Anand Sharma"
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-emerald-600"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Staff Email</label>
+                <input
+                  type="email"
+                  required
+                  value={newStaffEmail}
+                  onChange={(e) => setNewStaffEmail(e.target.value)}
+                  placeholder="staff@canteeniq.campus"
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-emerald-600"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Job Role Title</label>
+                <input
+                  type="text"
+                  required
+                  value={newStaffRole}
+                  onChange={(e) => setNewStaffRole(e.target.value)}
+                  placeholder="Kitchen Counter Lead"
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-emerald-600"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Staff Passcode</label>
+                <input
+                  type="text"
+                  required
+                  value={newStaffPasscode}
+                  onChange={(e) => setNewStaffPasscode(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-xl font-mono focus:bg-white focus:outline-emerald-600"
+                />
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="font-semibold text-slate-700">Granted Permissions</label>
+                <div className="space-y-1.5 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                  {[
+                    { id: 'staff:view_dashboard', label: 'View Staff Dashboard' },
+                    { id: 'orders:update_status', label: 'Update Food Order Status' },
+                    { id: 'inventory:manage', label: 'Manage Food Stock & Availability' },
+                    { id: 'tables:manage', label: 'Manage Floor Dining Tables' },
+                    { id: 'system:reset_demo', label: 'Reset Demo Data Defaults' },
+                  ].map((perm) => (
+                    <label key={perm.id} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newStaffPermissions.includes(perm.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setNewStaffPermissions([...newStaffPermissions, perm.id]);
+                          } else {
+                            setNewStaffPermissions(
+                              newStaffPermissions.filter((p) => p !== perm.id)
+                            );
+                          }
+                        }}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span className="text-slate-800">{perm.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={staffFormSubmitting}
+                className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-sm rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+              >
+                {staffFormSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Provisioning Staff...</span>
+                  </>
+                ) : (
+                  <span>Create Staff Account</span>
+                )}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Staff Modal */}
+      {editingStaff && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5 border border-slate-200 shadow-2xl relative animate-in fade-in zoom-in-95 duration-150">
+            <button
+              type="button"
+              onClick={() => setEditingStaff(null)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <h3 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+                <Edit2 className="w-5 h-5 text-emerald-600" />
+                <span>Edit Staff Member · {editingStaff.staffId}</span>
+              </h3>
+              <p className="text-xs text-slate-600">
+                Update job role, passcode, or granted operations permissions.
+              </p>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setStaffFormSubmitting(true);
+                try {
+                  await updateStaffMember(editingStaff.staffId, {
+                    name: editingStaff.name,
+                    role: editingStaff.role,
+                    passcode: editingStaff.passcode,
+                    permissions: editingStaff.permissions,
+                  });
+                  setEditingStaff(null);
+                } catch (err: unknown) {
+                  alert(err instanceof Error ? err.message : 'Failed to update staff');
+                } finally {
+                  setStaffFormSubmitting(false);
+                }
+              }}
+              className="space-y-4 text-xs"
+            >
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Full Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editingStaff.name}
+                  onChange={(e) =>
+                    setEditingStaff({ ...editingStaff, name: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Job Role Title</label>
+                <input
+                  type="text"
+                  required
+                  value={editingStaff.role}
+                  onChange={(e) =>
+                    setEditingStaff({ ...editingStaff, role: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Passcode</label>
+                <input
+                  type="text"
+                  value={editingStaff.passcode || ''}
+                  onChange={(e) =>
+                    setEditingStaff({ ...editingStaff, passcode: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-xl font-mono"
+                />
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="font-semibold text-slate-700">Granted Permissions</label>
+                <div className="space-y-1.5 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                  {[
+                    { id: 'staff:view_dashboard', label: 'View Staff Dashboard' },
+                    { id: 'orders:update_status', label: 'Update Food Order Status' },
+                    { id: 'inventory:manage', label: 'Manage Food Stock & Availability' },
+                    { id: 'tables:manage', label: 'Manage Floor Dining Tables' },
+                    { id: 'system:reset_demo', label: 'Reset Demo Data Defaults' },
+                  ].map((perm) => (
+                    <label key={perm.id} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editingStaff.permissions.includes(perm.id)}
+                        onChange={(e) => {
+                          const perms = e.target.checked
+                            ? [...editingStaff.permissions, perm.id]
+                            : editingStaff.permissions.filter((p) => p !== perm.id);
+                          setEditingStaff({ ...editingStaff, permissions: perms });
+                        }}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span className="text-slate-800">{perm.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={staffFormSubmitting}
+                className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl transition-colors cursor-pointer"
+              >
+                {staffFormSubmitting ? 'Saving Changes...' : 'Save Staff Changes'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

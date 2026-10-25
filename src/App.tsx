@@ -28,6 +28,18 @@ import {
 } from './data/demoData';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { Permission } from './auth/authService';
+import {
+  collection,
+  doc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+} from 'firebase/firestore';
+import { db, testFirestoreConnection } from './firebase';
 import { Navbar } from './components/Navbar';
 import { StaffNavbar } from './components/StaffNavbar';
 import { RequireStaffAuth } from './components/RequireStaffAuth';
@@ -179,7 +191,14 @@ function parseRouteFromHash(): {
 }
 
 function CanteenIQWorkspace() {
-  const { staffSession, isStaffAuthenticated, logoutStaff, can } = useAuth();
+  const {
+    staffSession,
+    isStaffAuthenticated,
+    logoutStaff,
+    can,
+    user,
+    isAdmin,
+  } = useAuth();
 
   const initialRoute = useMemo(() => parseRouteFromHash(), []);
   const [portalMode, setPortalMode] = useState<PortalMode>(initialRoute.portal);
@@ -430,6 +449,94 @@ function CanteenIQWorkspace() {
     return () => controller.abort();
   }, [portalMode, refreshOrders]);
 
+  // Verify Firebase Firestore connectivity on mount
+  useEffect(() => {
+    testFirestoreConnection().catch((err) => {
+      console.warn('Initial Firestore connection notice:', err);
+    });
+  }, []);
+
+  // Real-time Cloud Firestore synchronization:
+  // - Admin (e.g. saraswataryan2312@gmail.com): listens to all orders in Firestore
+  // - Customer: listens to their own orders (filtered by userId == user.uid)
+  // - Preserves live status updates (Received -> Preparing -> Ready -> Dispatched -> Delivered)
+  useEffect(() => {
+    if (!user) return;
+
+    try {
+      const ordersCol = collection(db, 'orders');
+      const q = isAdmin
+        ? query(ordersCol)
+        : query(ordersCol, where('userId', '==', user.uid));
+
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const remoteOrders: Order[] = [];
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            remoteOrders.push({
+              id: docSnap.id,
+              token: data.token || docSnap.id,
+              studentName: data.studentName || data.customerName || 'Customer',
+              rollNumber: data.rollNumber || '',
+              items: Array.isArray(data.items) ? data.items : [],
+              totalAmount:
+                typeof data.totalAmount === 'number' ? data.totalAmount : 0,
+              status: (data.status as OrderStatus) || OrderStatus.Received,
+              createdAt:
+                data.createdAtText ||
+                (data.createdAt?.toDate
+                  ? data.createdAt
+                      .toDate()
+                      .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : new Date().toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })),
+              estimatedMinutes: data.estimatedMinutes ?? 10,
+              tableId: data.tableId || undefined,
+              notes: data.notes || undefined,
+              isUserOrder: data.userId === user.uid || Boolean(data.isUserOrder),
+              userId: data.userId,
+              customerEmail: data.customerEmail,
+              customerPhone: data.customerPhone,
+              deliveryAddress: data.deliveryAddress,
+              deliveryNotes: data.deliveryNotes,
+            });
+          });
+
+          // Sort descending by id
+          remoteOrders.sort((a, b) => b.id.localeCompare(a.id));
+
+          setOrders((prev) => {
+            const remoteMap = new Map<string, Order>();
+            remoteOrders.forEach((ro) => {
+              remoteMap.set(ro.id, ro);
+              remoteMap.set(ro.token.toLowerCase(), ro);
+            });
+            const merged = [
+              ...remoteOrders,
+              ...prev.filter(
+                (p) =>
+                  !remoteMap.has(p.id) &&
+                  !remoteMap.has(p.token.toLowerCase())
+              ),
+            ];
+            return areOrdersEqual(prev, merged) ? prev : merged;
+          });
+        },
+        (error) => {
+          console.warn('Firestore orders subscription notice:', error.message);
+        }
+      );
+
+      return () => unsubscribe();
+    } catch (err) {
+      console.warn('Failed to attach Firestore listener:', err);
+    }
+  }, [user, isAdmin]);
+
   const showToast = (message: string) => {
     setToastMessage(message);
   };
@@ -565,12 +672,16 @@ function CanteenIQWorkspace() {
   };
 
   // Student Checkout & Unique Order Token Generation (Initial status = Received)
-  const handlePlaceOrder = (payload: {
+  const handlePlaceOrder = async (payload: {
     studentName: string;
     rollNumber: string;
     tableId?: string;
     notes?: string;
-  }): Order => {
+    customerEmail?: string;
+    customerPhone?: string;
+    deliveryAddress?: string;
+    deliveryNotes?: string;
+  }): Promise<Order> => {
     const lineItems = cart
       .map((entry) => {
         const item = menuItems.find((m) => m.id === entry.menuItemId);
@@ -627,6 +738,11 @@ function CanteenIQWorkspace() {
       tableId: selectedTable ? selectedTable.label : payload.tableId,
       notes: payload.notes,
       isUserOrder: true,
+      userId: user?.uid,
+      customerEmail: payload.customerEmail || user?.email || undefined,
+      customerPhone: payload.customerPhone,
+      deliveryAddress: payload.deliveryAddress,
+      deliveryNotes: payload.deliveryNotes,
     };
 
     setMenuItems((prev) =>
@@ -677,6 +793,36 @@ function CanteenIQWorkspace() {
     setSelectedOrderToken(uniqueToken);
     setCart([]);
     showToast(`Order ${uniqueToken} placed — Status: Received`);
+
+    // Persist order in Cloud Firestore under /orders/{orderId}
+    if (user) {
+      try {
+        const orderDocRef = doc(db, 'orders', newOrder.id);
+        await setDoc(orderDocRef, {
+          id: newOrder.id,
+          token: newOrder.token,
+          studentName: newOrder.studentName,
+          customerName: newOrder.studentName,
+          rollNumber: newOrder.rollNumber || '',
+          items: newOrder.items,
+          totalAmount: newOrder.totalAmount,
+          status: newOrder.status,
+          createdAtText: formattedTime,
+          createdAt: serverTimestamp(),
+          estimatedMinutes: newOrder.estimatedMinutes,
+          tableId: newOrder.tableId || null,
+          notes: newOrder.notes || null,
+          isUserOrder: true,
+          userId: user.uid,
+          customerEmail: newOrder.customerEmail || user.email || '',
+          customerPhone: newOrder.customerPhone || '',
+          deliveryAddress: newOrder.deliveryAddress || '',
+          deliveryNotes: newOrder.deliveryNotes || '',
+        });
+      } catch (firestoreErr) {
+        console.warn('Error saving order to Cloud Firestore:', firestoreErr);
+      }
+    }
 
     void fetch('/api/orders', {
       method: 'POST',
@@ -1270,7 +1416,21 @@ function CanteenIQWorkspace() {
     const target = orders.find((o) => o.id === orderId);
     if (target) {
       setSelectedOrderToken(target.token);
-      showToast(`Demo Token ${target.token} status set to ${nextStatus}`);
+      showToast(`Token ${target.token} status set to ${nextStatus}`);
+    }
+
+    // Persist status update to Cloud Firestore
+    try {
+      const orderDocRef = doc(db, 'orders', orderId);
+      updateDoc(orderDocRef, {
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      }).catch((firestoreErr) => {
+        // Ignored for purely local demo fixture orders
+        console.warn('Firestore order status sync notice:', firestoreErr);
+      });
+    } catch {
+      // Ignore if document not present
     }
 
     void fetch(`/api/orders/${encodeURIComponent(orderId)}/status`, {

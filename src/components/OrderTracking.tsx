@@ -1,16 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowRight,
   Check,
   ChefHat,
   Clock,
+  LogIn,
   PackageCheck,
   Receipt,
   RefreshCw,
   Search,
+  ShoppingBag,
   Sparkles,
+  Truck,
+  UserCheck,
 } from 'lucide-react';
 import { ActiveTab, Order, OrderStatus } from '../types';
+import { useAuth } from '../auth/AuthContext';
 
 export const ORDERED_STATUS_STEPS: {
   status: OrderStatus;
@@ -21,26 +27,32 @@ export const ORDERED_STATUS_STEPS: {
   {
     status: OrderStatus.Received,
     label: 'Received',
-    description: 'Order token created and logged in demo queue',
+    description: 'Order confirmed and sent to canteen kitchen',
     icon: Receipt,
   },
   {
     status: OrderStatus.Preparing,
     label: 'Preparing',
-    description: 'Canteen kitchen preparing your items',
+    description: 'Fresh ingredients being prepared by chefs',
     icon: ChefHat,
   },
   {
     status: OrderStatus.Ready,
     label: 'Ready',
-    description: 'Ready for pickup at Express Counter',
+    description: 'Hot and ready for counter pickup or delivery',
     icon: Sparkles,
   },
   {
     status: OrderStatus.Collected,
-    label: 'Collected',
-    description: 'Order picked up by student',
+    label: 'Dispatched / Out',
+    description: 'Picked up from counter or out with delivery runner',
     icon: PackageCheck,
+  },
+  {
+    status: OrderStatus.Delivered,
+    label: 'Delivered',
+    description: 'Order completed and delivered to customer',
+    icon: Check,
   },
 ];
 
@@ -58,78 +70,86 @@ export const StudentOrderTrackerCard: React.FC<StudentOrderTrackerCardProps> = (
   );
 
   return (
-    <div className="border border-slate-200 rounded-xl bg-white p-6 sm:p-8 space-y-8">
-      {/* Top Summary: Token + Read-Only Current Status */}
+    <div className="border border-slate-200 rounded-xl bg-white p-6 sm:p-8 space-y-8 shadow-xs">
+      {/* Top Summary: Token + Current Status */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
         <div className="space-y-1">
-          <p className="text-xs text-slate-500">
-            Demo Order Token · Placed at {order.createdAt} ·{' '}
-            {order.isGroupOrder && order.groupCode
-              ? `Group Order (${order.groupCode})`
-              : order.isUserOrder
-              ? 'My Session Order'
-              : 'Sample Demo Order'}
-          </p>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>Order Token · Placed at {order.createdAt}</span>
+            {order.id && (
+              <span className="font-mono text-[11px] text-slate-400">
+                · ID: {order.id}
+              </span>
+            )}
+          </div>
           <div className="flex flex-wrap items-baseline gap-3">
             <h3 className="text-3xl font-bold font-mono tabular-nums text-slate-950">
               {order.token}
             </h3>
             <span
               aria-live="polite"
-              className={`text-sm font-semibold ${
-                order.status === OrderStatus.Ready
-                  ? 'text-emerald-700'
+              className={`text-sm font-semibold px-2.5 py-0.5 rounded-full ${
+                order.status === OrderStatus.Delivered ||
+                order.status === OrderStatus.Collected
+                  ? 'bg-slate-100 text-slate-800'
+                  : order.status === OrderStatus.Ready
+                  ? 'bg-emerald-100 text-emerald-800 font-bold'
                   : order.status === OrderStatus.Preparing
-                  ? 'text-amber-700'
-                  : order.status === OrderStatus.Collected
-                  ? 'text-slate-600'
-                  : 'text-emerald-800'
+                  ? 'bg-amber-100 text-amber-900 font-bold'
+                  : 'bg-blue-50 text-blue-900'
               }`}
             >
-              Current Status: {order.status}
+              Status: {order.status}
             </span>
           </div>
+
           <p className="text-sm text-slate-600">
-            {order.studentName}
-            {order.isGroupOrder ? ' (Organizer)' : ''} ({order.rollNumber})
-            {order.tableId
-              ? ` · Seated at ${order.tableId}`
-              : ' · Express Counter Pickup'}
+            Customer: <span className="font-medium text-slate-900">{order.studentName}</span>
+            {order.customerPhone ? ` · 📞 ${order.customerPhone}` : ''}
           </p>
+
+          {order.deliveryAddress && (
+            <p className="text-xs text-slate-600 flex items-center gap-1.5 mt-1">
+              <Truck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+              <span>Location: <strong className="text-slate-800">{order.deliveryAddress}</strong></span>
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col sm:items-end gap-1 shrink-0 text-xs font-medium text-slate-600">
-          {order.status === OrderStatus.Collected ? (
+          {order.status === OrderStatus.Delivered ||
+          order.status === OrderStatus.Collected ? (
             <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-800">
               <Check className="w-4 h-4 text-emerald-700" />
-              <span>Order Collected</span>
+              <span>Order Fulfilled</span>
             </span>
           ) : (
-            <span>Read-Only Student Tracker (Demo)</span>
+            <span className="text-emerald-800 font-semibold">Active Kitchen Order</span>
           )}
           {lastUpdatedTime && (
             <span className="text-[11px] font-mono tabular-nums text-slate-400">
-              Last updated: {lastUpdatedTime}
+              Synced: {lastUpdatedTime}
             </span>
           )}
         </div>
       </div>
 
-      {/* 4 Ordered Status Stages: Received -> Preparing -> Ready -> Collected */}
+      {/* 5 Ordered Status Stages: Received -> Preparing -> Ready -> Dispatched -> Delivered */}
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-          <span>Order Status Progression</span>
+          <span>Order Progression Pipeline</span>
           <span className="inline-flex items-center gap-1 tabular-nums">
             <Clock className="w-3.5 h-3.5 text-emerald-700" />
-            {order.status === OrderStatus.Collected
-              ? 'Completed & collected'
+            {order.status === OrderStatus.Delivered ||
+            order.status === OrderStatus.Collected
+              ? 'Completed & Delivered'
               : order.status === OrderStatus.Ready
-              ? 'Ready now at Pickup Counter'
-              : `Estimated demo prep: ~${order.estimatedMinutes} mins`}
+              ? 'Ready now for collection / delivery'
+              : `Est. prep: ~${order.estimatedMinutes} mins`}
           </span>
         </div>
 
-        <ol className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+        <ol className="grid grid-cols-1 sm:grid-cols-5 gap-3">
           {ORDERED_STATUS_STEPS.map((step, index) => {
             const Icon = step.icon;
             const isCompleted = index < currentStepIndex;
@@ -139,16 +159,16 @@ export const StudentOrderTrackerCard: React.FC<StudentOrderTrackerCardProps> = (
               <li
                 key={step.status}
                 aria-current={isCurrent ? 'step' : undefined}
-                className={`p-4 rounded-xl border transition-colors ${
+                className={`p-3.5 rounded-xl border transition-colors ${
                   isCurrent
-                    ? 'border-emerald-600 bg-emerald-50/70'
+                    ? 'border-emerald-600 bg-emerald-50/70 shadow-xs'
                     : isCompleted
                     ? 'border-emerald-200 bg-white'
                     : 'border-slate-200 bg-slate-50/60 opacity-75'
                 }`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-mono tabular-nums text-slate-500">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-mono tabular-nums text-slate-500">
                     0{index + 1}
                   </span>
                   {isCompleted ? (
@@ -162,7 +182,7 @@ export const StudentOrderTrackerCard: React.FC<StudentOrderTrackerCardProps> = (
                   )}
                 </div>
                 <p
-                  className={`text-sm font-bold ${
+                  className={`text-xs sm:text-sm font-bold ${
                     isCurrent
                       ? 'text-emerald-950'
                       : isCompleted
@@ -172,7 +192,7 @@ export const StudentOrderTrackerCard: React.FC<StudentOrderTrackerCardProps> = (
                 >
                   {step.label}
                 </p>
-                <p className="text-xs text-slate-600 mt-1 leading-snug">
+                <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
                   {step.description}
                 </p>
               </li>
@@ -184,7 +204,7 @@ export const StudentOrderTrackerCard: React.FC<StudentOrderTrackerCardProps> = (
       {/* Ordered Items & Total Price */}
       <div className="pt-6 border-t border-slate-200 space-y-4">
         <div className="flex items-center justify-between">
-          <h4 className="text-sm font-bold text-slate-900">Ordered Items</h4>
+          <h4 className="text-sm font-bold text-slate-900">Ordered Food Items</h4>
           <span className="text-xs text-slate-500 tabular-nums">
             {order.items.reduce((sum, i) => sum + i.quantity, 0)} total items
           </span>
@@ -212,49 +232,15 @@ export const StudentOrderTrackerCard: React.FC<StudentOrderTrackerCardProps> = (
           ))}
         </div>
 
-        {order.isGroupOrder &&
-          order.groupParticipants &&
-          order.groupParticipants.length > 0 && (
-            <div className="pt-3 border-t border-slate-200 space-y-2">
-              <p className="text-xs font-bold text-slate-800">
-                Group Participants ({order.groupCode} ·{' '}
-                {order.groupParticipants.length} Friends)
-              </p>
-              <div className="space-y-1.5 text-xs text-slate-600 tabular-nums">
-                {order.groupParticipants.map((part) => (
-                  <div
-                    key={part.participantId}
-                    className="flex flex-wrap items-baseline justify-between gap-2"
-                  >
-                    <span>
-                      <span className="font-semibold text-slate-800">
-                        {part.participantName}
-                      </span>
-                      {part.isOrganizer ? ' (Organizer)' : ''}:{' '}
-                      {part.items.length === 0
-                        ? 'No items'
-                        : part.items
-                            .map((i) => `${i.quantity}× ${i.name}`)
-                            .join(', ')}
-                    </span>
-                    <span className="font-mono font-medium text-slate-900">
-                      ₹{part.subtotal}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
         {order.notes && (
           <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-200">
-            Kitchen Note: {order.notes}
+            Instructions / Notes: {order.notes}
           </p>
         )}
 
         <div className="pt-3 border-t border-slate-200 flex items-center justify-between text-base font-bold text-slate-950 tabular-nums">
-          <span>Total Price (Demo)</span>
-          <span className="font-mono text-emerald-800">
+          <span>Total Paid</span>
+          <span className="font-mono text-emerald-800 text-lg">
             ₹{order.totalAmount}
           </span>
         </div>
@@ -276,8 +262,6 @@ interface OrderTrackingProps {
   onRefreshOrders: (signal?: AbortSignal) => Promise<OrderRefreshResult>;
 }
 
-const ORDER_POLL_INTERVAL_MS = 3000;
-
 export const OrderTracking: React.FC<OrderTrackingProps> = ({
   orders,
   selectedToken,
@@ -285,338 +269,252 @@ export const OrderTracking: React.FC<OrderTrackingProps> = ({
   onNavigateTab,
   onRefreshOrders,
 }) => {
+  const { user, isAuthenticated, signInWithGoogle } = useAuth();
   const [tokenSearch, setTokenSearch] = useState('');
-  const [listScope, setListScope] = useState<'all' | 'mine'>('all');
   const [lastUpdatedTime, setLastUpdatedTime] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const onRefreshOrdersRef = useRef(onRefreshOrders);
-  onRefreshOrdersRef.current = onRefreshOrders;
-
-  const isMountedRef = useRef(true);
-  const inFlightRef = useRef(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
-
-  const executeStatusFetch = useCallback(async () => {
-    if (!isMountedRef.current || inFlightRef.current) return;
-    inFlightRef.current = true;
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
+  const handleManualRefresh = async () => {
     setIsRefreshing(true);
-
     try {
-      const result = await onRefreshOrdersRef.current(controller.signal);
-      if (!isMountedRef.current || controller.signal.aborted) return;
-
-      if (result.ok) {
-        setLastUpdatedTime(
-          new Date().toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          })
-        );
+      const res = await onRefreshOrders();
+      if (res.ok) {
+        setLastUpdatedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         setFetchError(null);
-      } else {
-        setFetchError(
-          result.error ||
-            "Couldn't check for the latest order status right now. Showing your last known order details — retrying automatically every 3 seconds."
-        );
       }
-    } catch (err: unknown) {
-      if (
-        !isMountedRef.current ||
-        (err instanceof DOMException && err.name === 'AbortError')
-      ) {
-        return;
-      }
-      setFetchError(
-        "Couldn't check for the latest order status right now. Showing your last known order details — retrying automatically every 3 seconds."
-      );
+    } catch {
+      // Ignore
     } finally {
-      inFlightRef.current = false;
-      if (isMountedRef.current) {
-        setIsRefreshing(false);
-      }
+      setIsRefreshing(false);
     }
-  }, []);
+  };
 
-  // Poll every 3 seconds ONLY while the Student Order Tracking page is open; stop cleanly on unmount
-  useEffect(() => {
-    isMountedRef.current = true;
-
-    void executeStatusFetch();
-    const intervalId = window.setInterval(() => {
-      void executeStatusFetch();
-    }, ORDER_POLL_INTERVAL_MS);
-
-    return () => {
-      isMountedRef.current = false;
-      window.clearInterval(intervalId);
-      abortControllerRef.current?.abort();
-    };
-  }, [executeStatusFetch]);
-
-  const userOrdersCount = useMemo(
-    () => orders.filter((o) => o.isUserOrder).length,
-    [orders]
-  );
-
-  const scopedOrders = useMemo(() => {
-    if (listScope === 'mine') {
-      return orders.filter((o) => o.isUserOrder);
-    }
-    return orders;
-  }, [orders, listScope]);
-
-  const filteredOrderList = useMemo(() => {
+  const filteredOrders = useMemo(() => {
     const q = tokenSearch.trim().toLowerCase();
-    if (!q) return scopedOrders;
-    return scopedOrders.filter(
+    if (!q) return orders;
+    return orders.filter(
       (o) =>
         o.token.toLowerCase().includes(q) ||
+        o.id.toLowerCase().includes(q) ||
         o.studentName.toLowerCase().includes(q) ||
-        o.rollNumber.toLowerCase().includes(q) ||
-        (o.groupCode && o.groupCode.toLowerCase().includes(q))
+        (o.deliveryAddress && o.deliveryAddress.toLowerCase().includes(q))
     );
-  }, [scopedOrders, tokenSearch]);
+  }, [orders, tokenSearch]);
 
   const activeOrder = useMemo(() => {
     if (selectedToken) {
-      const exact = scopedOrders.find(
-        (o) => o.token.toLowerCase() === selectedToken.toLowerCase()
+      const exact = filteredOrders.find(
+        (o) => o.token.toLowerCase() === selectedToken.toLowerCase() || o.id === selectedToken
       );
       if (exact) return exact;
     }
-    return scopedOrders[0] ?? orders[0] ?? null;
-  }, [scopedOrders, orders, selectedToken]);
+    return filteredOrders[0] ?? null;
+  }, [filteredOrders, selectedToken]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-      {/* Student My Orders & Tracking Header */}
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-200 pb-6">
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-emerald-700">
-            Student Panel · My Orders &amp; Demo Order Tracking
+            Cloud Firestore Persistent Orders · Real-Time Updates
           </p>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-950">
-            My Orders &amp; Token Status
+            My Orders &amp; Food Tracking
           </h1>
           <p className="text-sm text-slate-600 max-w-2xl">
-            View your placed demo orders and follow preparation status from
-            Received to Collected. Statuses auto-refresh every 3 seconds while
-            this tracking page is open (shared in-memory demo server state, not a
-            persistent cloud database).
+            Track your meal preparation from Received to Delivered in real-time.
+            Orders are securely stored in Cloud Firestore and linked to your
+            Google account.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 shrink-0">
-          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600 font-mono tabular-nums">
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
+          >
             <RefreshCw
               className={`w-3.5 h-3.5 text-emerald-700 shrink-0 ${
                 isRefreshing ? 'animate-spin' : ''
               }`}
             />
-            <span>
-              {lastUpdatedTime
-                ? `Last updated: ${lastUpdatedTime}`
-                : 'Checking latest status…'}{' '}
-              <span className="text-slate-400 font-sans">· every 3s</span>
-            </span>
-          </div>
+            <span>Refresh Status</span>
+          </button>
 
           <button
             type="button"
             onClick={() => onNavigateTab(ActiveTab.Menu)}
-            className="px-4 py-2 text-sm font-semibold text-white bg-emerald-700 rounded-lg hover:bg-emerald-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-700 rounded-lg hover:bg-emerald-800 transition-colors whitespace-nowrap cursor-pointer"
           >
-            Order More Items
+            <ShoppingBag className="w-4 h-4" />
+            <span>Order Food</span>
           </button>
         </div>
       </div>
 
-      {/* Friendly Non-Blocking Warning When Fetching Latest Status Fails */}
-      {fetchError && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="p-4 rounded-xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950"
-        >
-          <div className="flex items-start sm:items-center gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
-            <p className="leading-relaxed">{fetchError}</p>
+      {/* Guest Authentication Prompt */}
+      {!isAuthenticated && (
+        <div className="p-6 rounded-2xl bg-emerald-50/80 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-emerald-950">
+              Sign In with Google to View Your Order History
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-600 max-w-xl">
+              Orders placed with your Google account are permanently stored in
+              Firestore and update in real time as the canteen prepares and
+              delivers your meal.
+            </p>
           </div>
+
           <button
             type="button"
-            disabled={isRefreshing}
-            onClick={() => void executeStatusFetch()}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-950 bg-white border border-amber-300 hover:bg-amber-100 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer w-fit"
+            onClick={() => void signInWithGoogle()}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-slate-800 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors shadow-xs cursor-pointer whitespace-nowrap shrink-0"
           >
-            <RefreshCw
-              className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
-            />
-            <span>Try Again Now</span>
+            <LogIn className="w-4 h-4 text-emerald-700" />
+            <span>Continue with Google</span>
           </button>
         </div>
       )}
 
-      {orders.length === 0 ? (
-        <div className="p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-4">
-          <p className="text-base font-semibold text-slate-900">
-            No demo orders in queue yet
-          </p>
-          <p className="text-sm text-slate-600">
-            Head to the Sample Menu to add dishes and generate your first pickup
-            token.
-          </p>
+      {/* Authenticated user indicator */}
+      {isAuthenticated && user && (
+        <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700">
+          <div className="flex items-center gap-2 font-medium">
+            <UserCheck className="w-4 h-4 text-emerald-700" />
+            <span>
+              Signed in as <strong className="text-slate-900">{user.displayName || user.email}</strong> · Viewing your private orders
+            </span>
+          </div>
+          <span className="font-mono text-emerald-800 font-bold">
+            {orders.length} {orders.length === 1 ? 'order' : 'orders'} found
+          </span>
+        </div>
+      )}
+
+      {/* Search Bar */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={tokenSearch}
+            onChange={(e) => setTokenSearch(e.target.value)}
+            placeholder="Search by order token (e.g. CIQ-106) or order ID..."
+            className="w-full pl-9 pr-4 py-2.5 text-sm bg-white border border-slate-300 rounded-xl focus:outline-none focus:border-emerald-600"
+          />
+        </div>
+      </div>
+
+      {fetchError && (
+        <div
+          role="alert"
+          className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center gap-2"
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>{fetchError}</span>
+        </div>
+      )}
+
+      {/* Active Order Spotlight Tracker */}
+      {activeOrder ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-slate-950">
+              Active Order Tracker
+            </h2>
+            <span className="text-xs text-slate-500 font-mono">
+              Token {activeOrder.token}
+            </span>
+          </div>
+
+          <StudentOrderTrackerCard
+            order={activeOrder}
+            lastUpdatedTime={lastUpdatedTime}
+          />
+        </div>
+      ) : (
+        <div className="border border-slate-200 rounded-2xl bg-white p-12 text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center mx-auto">
+            <ShoppingBag className="w-7 h-7" />
+          </div>
+          <div className="space-y-1 max-w-sm mx-auto">
+            <h3 className="text-base font-bold text-slate-900">
+              No orders found
+            </h3>
+            <p className="text-xs text-slate-500">
+              {isAuthenticated
+                ? "You haven't placed any orders yet. Head to our public menu to choose delicious dishes!"
+                : "You don't have any active orders right now. Sign in or browse the menu to order."}
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => onNavigateTab(ActiveTab.Menu)}
-            className="px-4 py-2.5 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer"
+            className="px-4 py-2.5 text-xs sm:text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl transition-colors cursor-pointer"
           >
-            Browse Sample Menu
+            Browse Public Food Menu
           </button>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          {/* Left Sidebar: My Orders / All Demo Tokens */}
-          <div className="lg:col-span-4 space-y-4">
-            {/* Scope Filter */}
-            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
-              <button
-                type="button"
-                onClick={() => setListScope('all')}
-                className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                  listScope === 'all'
-                    ? 'bg-white text-emerald-950 shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
+      )}
+
+      {/* All Orders List */}
+      {filteredOrders.length > 1 && (
+        <div className="space-y-4 pt-6 border-t border-slate-200">
+          <h3 className="text-base font-bold text-slate-950">
+            Order History ({filteredOrders.length})
+          </h3>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredOrders.map((ord) => (
+              <div
+                key={ord.id}
+                onClick={() => onSelectToken(ord.token)}
+                className={`p-4 rounded-xl border text-left cursor-pointer transition-all space-y-3 ${
+                  activeOrder?.id === ord.id
+                    ? 'border-emerald-600 bg-emerald-50/50 shadow-xs'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
                 }`}
               >
-                All Demo Tokens ({orders.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setListScope('mine')}
-                className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                  listScope === 'mine'
-                    ? 'bg-white text-emerald-950 shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                My Orders ({userOrdersCount})
-              </button>
-            </div>
-
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={tokenSearch}
-                onChange={(e) => setTokenSearch(e.target.value)}
-                placeholder="Search token (e.g. CIQ-106)..."
-                aria-label="Search order token"
-                className="w-full pl-9 pr-4 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-emerald-600"
-              />
-            </div>
-
-            <div className="border border-slate-200 rounded-xl divide-y divide-slate-200 bg-white overflow-hidden">
-              {filteredOrderList.length === 0 ? (
-                <div className="p-6 text-center space-y-2.5">
-                  <p className="text-sm font-medium text-slate-700">
-                    {listScope === 'mine' && userOrdersCount === 0
-                      ? 'You have not placed an order in this session yet.'
-                      : `No demo tokens match "${tokenSearch}"`}
-                  </p>
-                  <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
-                    {tokenSearch.trim() !== '' && (
-                      <button
-                        type="button"
-                        onClick={() => setTokenSearch('')}
-                        className="px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-lg transition-colors cursor-pointer"
-                      >
-                        Clear Search
-                      </button>
-                    )}
-                    {listScope === 'mine' && userOrdersCount === 0 && (
-                      <button
-                        type="button"
-                        onClick={() => onNavigateTab(ActiveTab.Menu)}
-                        className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 underline underline-offset-2 cursor-pointer"
-                      >
-                        Place a Demo Order from Menu
-                      </button>
-                    )}
-                  </div>
+                <div className="flex items-center justify-between">
+                  <span className="font-mono font-bold text-slate-950">
+                    {ord.token}
+                  </span>
+                  <span
+                    className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                      ord.status === OrderStatus.Ready
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : ord.status === OrderStatus.Preparing
+                        ? 'bg-amber-100 text-amber-900'
+                        : ord.status === OrderStatus.Delivered ||
+                          ord.status === OrderStatus.Collected
+                        ? 'bg-slate-100 text-slate-700'
+                        : 'bg-blue-50 text-blue-900'
+                    }`}
+                  >
+                    {ord.status}
+                  </span>
                 </div>
-              ) : (
-                filteredOrderList.map((order) => {
-                  const isSelected = activeOrder?.id === order.id;
-                  return (
-                    <button
-                      key={order.id}
-                      type="button"
-                      onClick={() => onSelectToken(order.token)}
-                      className={`w-full text-left p-4 transition-colors cursor-pointer flex items-center justify-between gap-4 ${
-                        isSelected ? 'bg-emerald-50/70' : 'hover:bg-slate-50'
-                      }`}
-                    >
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-sm text-slate-950 tabular-nums">
-                            {order.token}
-                          </span>
-                          <span className="text-xs text-slate-400">·</span>
-                          <span className="text-xs font-medium text-emerald-800 truncate">
-                            {order.isGroupOrder && order.groupCode
-                              ? `Group · ${order.groupCode}`
-                              : order.isUserOrder
-                              ? 'My Order'
-                              : 'Sample Order'}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-600 truncate tabular-nums">
-                          {order.studentName} · {order.items.length}{' '}
-                          {order.items.length === 1 ? 'item' : 'items'} · ₹
-                          {order.totalAmount}
-                        </p>
-                      </div>
 
-                      <div className="text-right shrink-0">
-                        <span
-                          className={`text-xs font-semibold ${
-                            order.status === OrderStatus.Ready
-                              ? 'text-emerald-700'
-                              : order.status === OrderStatus.Preparing
-                              ? 'text-amber-700'
-                              : order.status === OrderStatus.Collected
-                              ? 'text-slate-500'
-                              : 'text-slate-800'
-                          }`}
-                        >
-                          {order.status}
-                        </span>
-                        <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
-                          {order.createdAt}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
+                <div className="text-xs text-slate-600 space-y-1">
+                  <p>Placed at: {ord.createdAt}</p>
+                  <p className="truncate">
+                    {ord.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')}
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs font-bold text-slate-900">
+                  <span>Total Amount</span>
+                  <span className="font-mono text-emerald-800">
+                    ₹{ord.totalAmount}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
-
-          {/* Right Main Detail: Read-Only Student Order Tracker Card */}
-          {activeOrder && (
-            <div className="lg:col-span-8">
-              <StudentOrderTrackerCard
-                order={activeOrder}
-                lastUpdatedTime={lastUpdatedTime}
-              />
-            </div>
-          )}
         </div>
       )}
     </div>

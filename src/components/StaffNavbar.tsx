@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { LogOut, Menu, X } from 'lucide-react';
+import { History, LogOut, Menu, ShieldCheck, X } from 'lucide-react';
 import { StaffSection } from '../types';
+import { useAuth } from '../auth/AuthContext';
 
 interface StaffNavbarProps {
   activeSection: StaffSection;
@@ -9,7 +10,7 @@ interface StaffNavbarProps {
   onLogout: () => void;
 }
 
-const STAFF_LINKS: { id: StaffSection; label: string }[] = [
+const BASE_STAFF_LINKS: { id: StaffSection; label: string }[] = [
   { id: 'orders', label: 'Orders' },
   { id: 'inventory', label: 'Inventory' },
   { id: 'tables', label: 'Floor Tables' },
@@ -22,6 +23,15 @@ export const StaffNavbar: React.FC<StaffNavbarProps> = ({
   onLogout,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { isAdmin } = useAuth();
+
+  const links: { id: StaffSection; label: string }[] = isAdmin
+    ? [
+        ...BASE_STAFF_LINKS,
+        { id: 'staff', label: 'Staff Management' },
+        { id: 'audit', label: 'Audit Trail' },
+      ]
+    : BASE_STAFF_LINKS;
 
   const handleSectionClick = (section: StaffSection) => {
     onSelectSection(section);
@@ -38,15 +48,15 @@ export const StaffNavbar: React.FC<StaffNavbarProps> = ({
           onClick={() => handleSectionClick('orders')}
           className="text-xl font-bold tracking-tight text-emerald-950 hover:text-emerald-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
-          CanteenIQ Staff
+          {isAdmin ? 'CanteenIQ Admin' : 'CanteenIQ Staff'}
         </button>
 
-        {/* Zone 2: 4 concise single-line Staff navigation links */}
+        {/* Zone 2: Navigation links */}
         <nav
           aria-label="Staff Dashboard Navigation"
           className="hidden md:flex items-center gap-7 text-sm font-medium"
         >
-          {STAFF_LINKS.map((link) => {
+          {links.map((link) => {
             const isActive = activeSection === link.id;
             return (
               <button
@@ -63,6 +73,7 @@ export const StaffNavbar: React.FC<StaffNavbarProps> = ({
               </button>
             );
           })}
+
 
           <button
             type="button"

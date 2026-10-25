@@ -20,6 +20,7 @@ export enum Permission {
   ManageInventory = 'inventory:manage',
   ManageTables = 'tables:manage',
   ResetDemoData = 'system:reset_demo',
+  ManageStaff = 'staff:manage',
 }
 
 export interface StaffSession {
@@ -30,8 +31,10 @@ export interface StaffSession {
   role: UserRole.Staff;
   permissions: Permission[];
   issuedAt: string;
-  isDemoOnly: true;
+  isDemoOnly?: boolean;
+  status?: 'active' | 'inactive';
 }
+
 
 export interface StaffSignInResult {
   ok: boolean;
@@ -171,3 +174,75 @@ export function hasStaffPermission(
   }
   return session.permissions.includes(permission);
 }
+
+export const serverStaffAuthAdapter: AuthAdapter = {
+  getCurrentSession(): StaffSession | null {
+    try {
+      const raw = sessionStorage.getItem(DEMO_STAFF_SESSION_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as StaffSession;
+      if (parsed && parsed.role === UserRole.Staff && parsed.staffId) {
+        return parsed;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
+
+  async signInStaff(
+    staffId: string,
+    passcode: string
+  ): Promise<StaffSignInResult> {
+    try {
+      const resp = await fetch('/api/staff/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: staffId, passcode }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        return {
+          ok: false,
+          error: data.error || 'Failed to authenticate staff account',
+        };
+      }
+
+      const session: StaffSession = {
+        userId: data.session.userId,
+        staffId: data.session.staffId,
+        displayName: data.session.displayName,
+        roleTitle: data.session.roleTitle,
+        role: UserRole.Staff,
+        permissions: (data.session.permissions as Permission[]) || [
+          Permission.ViewStaffDashboard,
+          Permission.UpdateOrderStatus,
+        ],
+        issuedAt: data.session.issuedAt || new Date().toLocaleTimeString(),
+        isDemoOnly: false,
+      };
+
+      try {
+        sessionStorage.setItem(DEMO_STAFF_SESSION_KEY, JSON.stringify(session));
+      } catch {
+        // Ignore storage exceptions
+      }
+
+      return { ok: true, session };
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Server authentication request failed',
+      };
+    }
+  },
+
+  async signOutStaff(): Promise<void> {
+    try {
+      sessionStorage.removeItem(DEMO_STAFF_SESSION_KEY);
+    } catch {
+      // Ignore storage exceptions
+    }
+  },
+};
+

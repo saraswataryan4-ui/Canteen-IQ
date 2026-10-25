@@ -1,36 +1,88 @@
+import fs from 'fs';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import express from 'express';
 import type { Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import nodemailer from 'nodemailer';
 import { GoogleGenAI } from '@google/genai';
 import {
   type RawModelRecommendedItem,
   validateModelRecommendations,
 } from './src/utils/validateAssistantRecommendation.ts';
 import type {
+  AuditLog,
+  CustomerAccount,
   GroupParticipantOrderSummary,
   Order,
   OrderLineItem,
   OrderStatus,
+  StaffMember,
 } from './src/types.ts';
 import {
   cloneDefaultDemoOrders,
   ORDER_STATUS_LIST,
 } from './src/data/defaultOrders.ts';
 
-dotenv.config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Ensure local environment files (.env and .env.local) are loaded reliably
-dotenv.config({ path: path.resolve(__dirname, '.env') });
-dotenv.config({ path: path.resolve(__dirname, '.env.local') });
+
+// Synchronize secrets from AI Studio control-plane files (/app/.dev.env.json) and local env files
+function syncSecretsFromDisk(): void {
+  const secretFileCandidates = [
+    '/app/.dev.env.json',
+    path.resolve(__dirname, '../.dev.env.json'),
+    path.resolve(__dirname, '.dev.env.json'),
+    path.resolve(process.cwd(), '.dev.env.json'),
+    path.resolve(__dirname, '.env.local'),
+    path.resolve(process.cwd(), '.env.local'),
+    path.resolve(__dirname, '.env'),
+    path.resolve(process.cwd(), '.env'),
+  ];
+
+  for (const filePath of secretFileCandidates) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (filePath.endsWith('.json')) {
+        const json = JSON.parse(content);
+        if (json && typeof json === 'object') {
+          for (const [k, v] of Object.entries(json)) {
+            if (typeof v === 'string' && v.trim()) {
+              process.env[k] = v.trim();
+              const upper = k.toUpperCase();
+              if (!process.env[upper]) {
+                process.env[upper] = v.trim();
+              }
+            }
+          }
+        }
+      } else {
+        const parsed = dotenv.parse(content);
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'string' && v.trim()) {
+            process.env[k] = v.trim();
+            const upper = k.toUpperCase();
+            if (!process.env[upper]) {
+              process.env[upper] = v.trim();
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore transient read errors
+    }
+  }
+}
+
+// Initial boot sync
+dotenv.config();
+syncSecretsFromDisk();
 
 const PORT = Number(process.env.PORT) || 3000;
-const GEMMA_MODEL_ID = 'gemma-4-26b-a4b-it';
+const GEMMA_MODEL_ID = process.env.GEMINI_MODEL || 'gemma-4-26b-a4b-it';
 const MAX_GEMMA_ATTEMPTS = 3; // 1 initial attempt + up to 2 transient retries
 const PER_ATTEMPT_TIMEOUT_MS = 50000;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 500, 502, 503, 504]);
@@ -86,9 +138,125 @@ function recordDiagnostic(entry: SanitizedAttemptDiagnostic) {
 }
 
 // ============================================================================
+// Server-Side Authentication, Customer Registry, Staff & Audit Log Stores
+// ============================================================================
+const OTP_SECRET_SALT = process.env.OTP_SALT || 'canteeniq_campus_auth_salt_2026';
+const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+const OTP_COOLDOWN_MS = 60 * 1000; // 60 seconds
+const OTP_MAX_ATTEMPTS = 5;
+
+interface ServerOtpEntry {
+  email: string;
+  hashedCode: string;
+  codePlainDevOnly: string;
+  expiresAt: number;
+  attempts: number;
+  mode: 'signup' | 'login';
+  name?: string;
+  phone?: string;
+  lastSentAt: number;
+}
+
+const activeOtps = new Map<string, ServerOtpEntry>();
+
+function hashOtpCode(code: string): string {
+  return crypto.createHash('sha256').update(code + OTP_SECRET_SALT).digest('hex');
+}
+
+function generateCustomerId(): string {
+  return `CUST-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+}
+
+const serverCustomers = new Map<string, CustomerAccount>();
+
+let serverStaffList: StaffMember[] = [
+  {
+    staffId: 'STF-101',
+    staffUid: 'usr-stf-101',
+    name: 'Rajesh Verma',
+    email: 'rajesh.verma@canteeniq.campus',
+    passcode: 'canteen2026',
+    role: 'Canteen Operations Supervisor',
+    permissions: [
+      'staff:view_dashboard',
+      'orders:update_status',
+      'inventory:manage',
+      'tables:manage',
+      'system:reset_demo',
+    ],
+    status: 'active',
+    createdAt: '2026-01-10T08:00:00.000Z',
+    createdBy: 'saraswataryan2312@gmail.com',
+  },
+  {
+    staffId: 'STF-102',
+    staffUid: 'usr-stf-102',
+    name: 'Meera Krishnan',
+    email: 'meera.k@canteeniq.campus',
+    passcode: 'kitchen2026',
+    role: 'Kitchen Counter Lead',
+    permissions: [
+      'staff:view_dashboard',
+      'orders:update_status',
+      'inventory:manage',
+      'tables:manage',
+    ],
+    status: 'active',
+    createdAt: '2026-01-15T09:30:00.000Z',
+    createdBy: 'saraswataryan2312@gmail.com',
+  },
+];
+
+let serverAuditLogs: AuditLog[] = [
+  {
+    id: 'aud-init-001',
+    adminEmail: 'saraswataryan2312@gmail.com',
+    action: 'CREATE_STAFF',
+    targetStaffId: 'STF-101',
+    targetStaffName: 'Rajesh Verma',
+    details: 'Initial supervisor account provisioned with full operational access',
+    timestamp: '2026-01-10T08:00:00.000Z',
+  },
+  {
+    id: 'aud-init-002',
+    adminEmail: 'saraswataryan2312@gmail.com',
+    action: 'CREATE_STAFF',
+    targetStaffId: 'STF-102',
+    targetStaffName: 'Meera Krishnan',
+    details: 'Initial kitchen counter lead account provisioned with order and inventory permissions',
+    timestamp: '2026-01-15T09:30:00.000Z',
+  },
+];
+
+function getMailTransporter(): ReturnType<typeof nodemailer.createTransport> | null {
+  syncSecretsFromDisk();
+  const host = process.env.SMTP_HOST?.trim();
+  const user = process.env.SMTP_USER?.trim();
+  const pass = process.env.SMTP_PASS?.trim();
+  const port = Number(process.env.SMTP_PORT) || 587;
+
+  if (!host || !user || !pass) {
+    return null;
+  }
+
+  try {
+    return nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+    });
+  } catch (err) {
+    console.warn('[CanteenIQ Mailer] Failed to initialize mail transporter:', err);
+    return null;
+  }
+}
+
+// ============================================================================
 // Shared In-Memory Demo Order Store (Authoritative for active server process)
 // ============================================================================
 const VALID_ORDER_STATUSES = new Set<string>(ORDER_STATUS_LIST);
+
 
 let serverOrders: Order[] = cloneDefaultDemoOrders();
 
@@ -220,12 +388,26 @@ const DEFAULT_SERVER_MENU: ClientMenuSnapshotItem[] = [
 ];
 
 function getConfiguredApiKey(): string | null {
+  // Re-sync secrets from disk on demand so keys added in AI Studio Settings > Secrets are recognized immediately
+  syncSecretsFromDisk();
+
   const raw =
     process.env.GEMINI_API_KEY ||
     process.env.API_KEY ||
-    process.env.GOOGLE_API_KEY;
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY ||
+    process.env.GENAI_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
+    process.env.VITE_API_KEY;
+
   if (!raw) return null;
-  const trimmed = raw.trim();
+  let trimmed = raw.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
   if (
     !trimmed ||
     trimmed === 'MY_GEMINI_API_KEY' ||
@@ -537,8 +719,492 @@ async function startServer() {
     });
   });
 
+  // ==========================================================================
+  // Customer Authentication & Server-Side 6-Digit Email OTP Endpoints
+  // ==========================================================================
+  app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as {
+      email?: string;
+      mode?: 'signup' | 'login';
+      name?: string;
+      phone?: string;
+    };
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const mode = body.mode === 'login' ? 'login' : 'signup';
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+
+    if (!email || !email.includes('@') || !email.includes('.')) {
+      res.status(400).json({ ok: false, error: 'Please enter a valid email address.' });
+      return;
+    }
+
+    if (mode === 'signup') {
+      if (!name) {
+        res.status(400).json({ ok: false, error: 'Full name is required for customer registration.' });
+        return;
+      }
+      if (!phone || phone.length < 7) {
+        res.status(400).json({ ok: false, error: 'Valid phone number is required for customer registration.' });
+        return;
+      }
+
+      // Check duplicate customer account for the same email
+      if (serverCustomers.has(email)) {
+        res.status(400).json({
+          ok: false,
+          errorCode: 'EMAIL_ALREADY_EXISTS',
+          error: `An account already exists for ${email}. Please use Log In or sign in with Google.`,
+        });
+        return;
+      }
+    }
+
+    // Cooldown check (60s)
+    const existing = activeOtps.get(email);
+    const now = Date.now();
+    if (existing && now - existing.lastSentAt < OTP_COOLDOWN_MS) {
+      const remainingSec = Math.ceil((OTP_COOLDOWN_MS - (now - existing.lastSentAt)) / 1000);
+      res.status(429).json({
+        ok: false,
+        errorCode: 'RATE_LIMITED',
+        error: `Please wait ${remainingSec} seconds before requesting another verification code.`,
+        cooldownSeconds: remainingSec,
+      });
+      return;
+    }
+
+    // Generate genuine 6-digit cryptographic OTP
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const hashedCode = hashOtpCode(code);
+
+    activeOtps.set(email, {
+      email,
+      hashedCode,
+      codePlainDevOnly: code,
+      expiresAt: now + OTP_EXPIRY_MS,
+      attempts: 0,
+      mode,
+      name,
+      phone,
+      lastSentAt: now,
+    });
+
+    const transporter = getMailTransporter();
+    let emailSent = false;
+
+    if (transporter) {
+      try {
+        const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@canteeniq.campus';
+        await transporter.sendMail({
+          from: `"CanteenIQ Campus" <${fromAddr}>`,
+          to: email,
+          subject: `Your CanteenIQ Verification Code: ${code}`,
+          text: `Hello,\n\nYour 6-digit verification code for CanteenIQ is: ${code}\n\nThis code expires in 5 minutes.\nDo not share this code with anyone.`,
+          html: `<div style="font-family: sans-serif; padding: 24px; color: #0f172a; max-width: 500px; border: 1px solid #e2e8f0; border-radius: 12px;">
+            <h2 style="color: #065f46; margin-top: 0;">CanteenIQ Campus Dining</h2>
+            <p style="font-size: 15px;">Your six-digit email verification code is:</p>
+            <div style="font-size: 32px; font-weight: bold; letter-spacing: 6px; padding: 14px 20px; background: #ecfdf5; color: #065f46; border-radius: 8px; text-align: center; margin: 16px 0;">
+              ${code}
+            </div>
+            <p style="color: #64748b; font-size: 13px; line-height: 1.5;">This code will expire in 5 minutes. If you did not initiate this request, please safely ignore this message.</p>
+          </div>`,
+        });
+        emailSent = true;
+        console.info(`[CanteenIQ Auth OTP] Real outbound verification email dispatched to ${email}.`);
+      } catch (err) {
+        console.error(`[CanteenIQ Auth OTP] Outbound SMTP dispatch failed:`, err);
+      }
+    } else {
+      console.info(
+        `[CanteenIQ Auth OTP] Code for ${email} is: ${code} (Expires in 5m). Notice: Outbound SMTP credentials are not configured in Settings > Secrets. To send live emails, set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS.`
+      );
+    }
+
+    res.json({
+      ok: true,
+      email,
+      mode,
+      emailSent,
+      smtpConfigured: Boolean(transporter),
+      cooldownSeconds: 60,
+      expiresInMinutes: 5,
+      devOtpHint: !emailSent ? code : undefined,
+      message: emailSent
+        ? `A 6-digit verification code was sent to ${email}.`
+        : `Server generated 6-digit code. (Outbound email unconfigured: set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS in Settings > Secrets to enable live dispatch). For dev testing, code is: ${code}`,
+    });
+  });
+
+  app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { email?: string; code?: string };
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const code = typeof body.code === 'string' ? body.code.trim() : '';
+
+    if (!email || !code) {
+      res.status(400).json({ ok: false, error: 'Email and 6-digit verification code are required.' });
+      return;
+    }
+
+    const record = activeOtps.get(email);
+    if (!record) {
+      res.status(400).json({
+        ok: false,
+        error: 'No active verification code found for this email. Please request a new code.',
+      });
+      return;
+    }
+
+    const now = Date.now();
+    if (now > record.expiresAt) {
+      activeOtps.delete(email);
+      res.status(400).json({
+        ok: false,
+        errorCode: 'EXPIRED',
+        error: 'Verification code has expired. Please request a fresh code.',
+      });
+      return;
+    }
+
+    if (record.attempts >= OTP_MAX_ATTEMPTS) {
+      activeOtps.delete(email);
+      res.status(429).json({
+        ok: false,
+        errorCode: 'MAX_ATTEMPTS_EXCEEDED',
+        error: 'Too many incorrect attempts. For security, this code has been cancelled. Please request a new code.',
+      });
+      return;
+    }
+
+    record.attempts += 1;
+    const candidateHash = hashOtpCode(code);
+    if (candidateHash !== record.hashedCode) {
+      const remaining = OTP_MAX_ATTEMPTS - record.attempts;
+      res.status(400).json({
+        ok: false,
+        errorCode: 'INVALID_CODE',
+        error: `Incorrect verification code. ${remaining} attempt(s) remaining.`,
+      });
+      return;
+    }
+
+    // Single-use guarantee: remove verified OTP
+    activeOtps.delete(email);
+
+    // Retrieve or register customer record
+    let customer = serverCustomers.get(email);
+    if (!customer) {
+      const customerId = generateCustomerId();
+      const uid = `cust-${crypto.randomBytes(8).toString('hex')}`;
+      customer = {
+        customerId,
+        uid,
+        name: record.name || email.split('@')[0],
+        email,
+        phone: record.phone || '',
+        emailVerified: true,
+        createdAt: new Date().toISOString(),
+        status: 'active',
+        provider: 'email_otp',
+      };
+      serverCustomers.set(email, customer);
+    } else {
+      customer.emailVerified = true;
+      if (record.name && !customer.name) customer.name = record.name;
+      if (record.phone && !customer.phone) customer.phone = record.phone;
+    }
+
+    res.json({
+      ok: true,
+      verified: true,
+      customer,
+      customerId: customer.customerId,
+    });
+  });
+
+  app.get('/api/auth/customer', (req: Request, res: Response) => {
+    const email = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : '';
+    const uid = typeof req.query.uid === 'string' ? req.query.uid.trim() : '';
+
+    if (!email && !uid) {
+      res.status(400).json({ ok: false, error: 'Email or UID is required.' });
+      return;
+    }
+
+    let customer: CustomerAccount | undefined;
+    if (email) {
+      customer = serverCustomers.get(email);
+    } else if (uid) {
+      for (const c of serverCustomers.values()) {
+        if (c.uid === uid) {
+          customer = c;
+          break;
+        }
+      }
+    }
+
+    if (!customer) {
+      res.status(404).json({ ok: false, error: 'Customer record not found.' });
+      return;
+    }
+
+    res.json({ ok: true, customer });
+  });
+
+  app.post('/api/auth/customer', (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as {
+      email?: string;
+      uid?: string;
+      name?: string;
+      phone?: string;
+      provider?: 'google.com' | 'email_otp';
+    };
+
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const uid = typeof body.uid === 'string' ? body.uid.trim() : '';
+
+    if (!email || !uid) {
+      res.status(400).json({ ok: false, error: 'Email and UID are required.' });
+      return;
+    }
+
+    let customer = serverCustomers.get(email);
+    if (!customer) {
+      customer = {
+        customerId: generateCustomerId(),
+        uid,
+        name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : email.split('@')[0],
+        email,
+        phone: typeof body.phone === 'string' ? body.phone.trim() : '',
+        emailVerified: true,
+        createdAt: new Date().toISOString(),
+        status: 'active',
+        provider: body.provider || 'google.com',
+      };
+      serverCustomers.set(email, customer);
+    } else {
+      customer.uid = uid;
+      if (body.name && body.name.trim()) customer.name = body.name.trim();
+      if (body.phone && body.phone.trim()) customer.phone = body.phone.trim();
+      if (body.provider) customer.provider = body.provider;
+    }
+
+    res.json({ ok: true, customer, customerId: customer.customerId });
+  });
+
+  // ==========================================================================
+  // Staff Role Management, Activation & Authentication Endpoints
+  // ==========================================================================
+  app.get('/api/staff', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      staff: serverStaffList,
+      count: serverStaffList.length,
+    });
+  });
+
+  app.post('/api/staff', (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as {
+      name?: string;
+      email?: string;
+      passcode?: string;
+      role?: string;
+      permissions?: string[];
+      adminEmail?: string;
+    };
+
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const passcode = typeof body.passcode === 'string' ? body.passcode.trim() : 'staff2026';
+    const role = typeof body.role === 'string' ? body.role.trim() : 'Canteen Crew';
+    const permissions = Array.isArray(body.permissions) && body.permissions.length > 0
+      ? body.permissions.map(String)
+      : ['staff:view_dashboard', 'orders:update_status'];
+    const adminEmail = typeof body.adminEmail === 'string' ? body.adminEmail.trim() : 'saraswataryan2312@gmail.com';
+
+    if (!name || !email) {
+      res.status(400).json({ ok: false, error: 'Staff name and email are required.' });
+      return;
+    }
+
+    const existingStaff = serverStaffList.find((s) => s.email.toLowerCase() === email.toLowerCase());
+    if (existingStaff) {
+      res.status(400).json({ ok: false, error: `A staff member with email ${email} already exists.` });
+      return;
+    }
+
+    const staffNum = 100 + serverStaffList.length + 1;
+    const staffId = `STF-${staffNum}`;
+    const staffUid = `usr-stf-${crypto.randomBytes(4).toString('hex')}`;
+
+    const newStaff: StaffMember = {
+      staffId,
+      staffUid,
+      name,
+      email,
+      passcode,
+      role,
+      permissions,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      createdBy: adminEmail,
+    };
+
+    serverStaffList = [...serverStaffList, newStaff];
+
+    // Record audit log
+    const auditEntry: AuditLog = {
+      id: `aud-${crypto.randomBytes(6).toString('hex')}`,
+      adminEmail,
+      action: 'CREATE_STAFF',
+      targetStaffId: staffId,
+      targetStaffName: name,
+      details: `Provisioned new staff account ${staffId} (${role})`,
+      timestamp: new Date().toISOString(),
+    };
+    serverAuditLogs = [auditEntry, ...serverAuditLogs];
+
+    res.json({ ok: true, staff: newStaff, auditEntry });
+  });
+
+  app.patch('/api/staff/:staffId/status', (req: Request, res: Response) => {
+    const targetStaffId = decodeURIComponent(String(req.params.staffId || '')).trim().toUpperCase();
+    const body = (req.body ?? {}) as { status?: 'active' | 'inactive'; adminEmail?: string };
+    const nextStatus = body.status === 'inactive' ? 'inactive' : 'active';
+    const adminEmail = typeof body.adminEmail === 'string' ? body.adminEmail.trim() : 'saraswataryan2312@gmail.com';
+
+    const idx = serverStaffList.findIndex((s) => s.staffId.toUpperCase() === targetStaffId);
+    if (idx === -1) {
+      res.status(404).json({ ok: false, error: `Staff member ${targetStaffId} not found.` });
+      return;
+    }
+
+    const prevStaff = serverStaffList[idx];
+    const updatedStaff: StaffMember = { ...prevStaff, status: nextStatus };
+    serverStaffList = serverStaffList.map((s, i) => (i === idx ? updatedStaff : s));
+
+    const action = nextStatus === 'active' ? 'ACTIVATE_STAFF' : 'DEACTIVATE_STAFF';
+    const auditEntry: AuditLog = {
+      id: `aud-${crypto.randomBytes(6).toString('hex')}`,
+      adminEmail,
+      action,
+      targetStaffId: updatedStaff.staffId,
+      targetStaffName: updatedStaff.name,
+      details: `Staff status changed to ${nextStatus}`,
+      timestamp: new Date().toISOString(),
+    };
+    serverAuditLogs = [auditEntry, ...serverAuditLogs];
+
+    res.json({ ok: true, staff: updatedStaff, auditEntry });
+  });
+
+  app.patch('/api/staff/:staffId', (req: Request, res: Response) => {
+    const targetStaffId = decodeURIComponent(String(req.params.staffId || '')).trim().toUpperCase();
+    const body = (req.body ?? {}) as {
+      name?: string;
+      role?: string;
+      permissions?: string[];
+      passcode?: string;
+      adminEmail?: string;
+    };
+    const adminEmail = typeof body.adminEmail === 'string' ? body.adminEmail.trim() : 'saraswataryan2312@gmail.com';
+
+    const idx = serverStaffList.findIndex((s) => s.staffId.toUpperCase() === targetStaffId);
+    if (idx === -1) {
+      res.status(404).json({ ok: false, error: `Staff member ${targetStaffId} not found.` });
+      return;
+    }
+
+    const prev = serverStaffList[idx];
+    const updatedStaff: StaffMember = {
+      ...prev,
+      name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : prev.name,
+      role: typeof body.role === 'string' && body.role.trim() ? body.role.trim() : prev.role,
+      permissions: Array.isArray(body.permissions) && body.permissions.length > 0 ? body.permissions.map(String) : prev.permissions,
+      passcode: typeof body.passcode === 'string' && body.passcode.trim() ? body.passcode.trim() : prev.passcode,
+    };
+    serverStaffList = serverStaffList.map((s, i) => (i === idx ? updatedStaff : s));
+
+    const auditEntry: AuditLog = {
+      id: `aud-${crypto.randomBytes(6).toString('hex')}`,
+      adminEmail,
+      action: 'UPDATE_STAFF',
+      targetStaffId: updatedStaff.staffId,
+      targetStaffName: updatedStaff.name,
+      details: `Updated role to ${updatedStaff.role} with ${updatedStaff.permissions.length} permissions`,
+      timestamp: new Date().toISOString(),
+    };
+    serverAuditLogs = [auditEntry, ...serverAuditLogs];
+
+    res.json({ ok: true, staff: updatedStaff, auditEntry });
+  });
+
+  app.post('/api/staff/login', (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { identifier?: string; passcode?: string };
+    const identifier = typeof body.identifier === 'string' ? body.identifier.trim().toLowerCase() : '';
+    const passcode = typeof body.passcode === 'string' ? body.passcode.trim() : '';
+
+    if (!identifier || !passcode) {
+      res.status(400).json({ ok: false, error: 'Staff ID or email and passcode are required.' });
+      return;
+    }
+
+    const matched = serverStaffList.find(
+      (s) =>
+        s.staffId.toLowerCase() === identifier ||
+        s.email.toLowerCase() === identifier
+    );
+
+    if (!matched) {
+      res.status(401).json({ ok: false, error: 'Invalid Staff ID or email.' });
+      return;
+    }
+
+    // IMMEDIATE DISABLEMENT CHECK
+    if (matched.status !== 'active') {
+      res.status(403).json({
+        ok: false,
+        errorCode: 'STAFF_DEACTIVATED',
+        error: 'Your staff account has been deactivated by the administrator. Access is denied.',
+      });
+      return;
+    }
+
+    if (matched.passcode && matched.passcode !== passcode) {
+      res.status(401).json({ ok: false, error: 'Incorrect staff passcode.' });
+      return;
+    }
+
+    // Update last login
+    matched.lastLoginAt = new Date().toISOString();
+
+    res.json({
+      ok: true,
+      session: {
+        userId: matched.staffUid,
+        staffId: matched.staffId,
+        displayName: matched.name,
+        roleTitle: matched.role,
+        role: 'staff',
+        permissions: matched.permissions,
+        issuedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      },
+    });
+  });
+
+  app.get('/api/audit-logs', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      logs: serverAuditLogs,
+      count: serverAuditLogs.length,
+    });
+  });
+
   // Check server-side Gemma 4 readiness and sanitized diagnostics (never exposes GEMINI_API_KEY)
   app.get('/api/assistant/status', (_req: Request, res: Response) => {
+
     const apiKey = getConfiguredApiKey();
     res.json({
       configured: Boolean(apiKey),
